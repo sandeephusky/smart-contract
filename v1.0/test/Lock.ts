@@ -3,105 +3,122 @@ import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 import { expect } from "chai";
 import { ethers } from "hardhat";
 
-describe("BasicDutchAuction", function () {
-  async function deployAuctionFixture() {
-    
+describe("Lock", function () {
+  // We define a fixture to reuse the same setup in every test.
+  // We use loadFixture to run this setup once, snapshot that state,
+  // and reset Hardhat Network to that snapshot in every test.
+  async function deployOneYearLockFixture() {
+    const ONE_YEAR_IN_SECS = 365 * 24 * 60 * 60;
+    const ONE_GWEI = 1_000_000_000;
+
+    const lockedAmount = ONE_GWEI;
+    const unlockTime = (await time.latest()) + ONE_YEAR_IN_SECS;
+
+    // Contracts are deployed using the first signer/account by default
     const [owner, otherAccount] = await ethers.getSigners();
 
-    const basicDutchAuctionFactory = await ethers.getContractFactory("BasicDutchAuction");
-    const basicDutchAuctionToken = await basicDutchAuctionFactory.deploy(100, 10, 10);
+    const Lock = await ethers.getContractFactory("Lock");
+    const lock = await Lock.deploy(unlockTime, { value: lockedAmount });
 
-    return { basicDutchAuctionToken, owner, otherAccount };
+    return { lock, unlockTime, lockedAmount, owner, otherAccount };
   }
 
   describe("Deployment", function () {
-    it("Get the initial price", async function () {
-      const { basicDutchAuctionToken, owner, otherAccount } = await loadFixture(deployAuctionFixture);
+    it("Should set the right unlockTime", async function () {
+      const { lock, unlockTime } = await loadFixture(deployOneYearLockFixture);
 
-      expect(await basicDutchAuctionToken.currentPrice()).to.equal(200);
+      expect(await lock.unlockTime()).to.equal(unlockTime);
     });
 
-    it("Bid from the account which created the contract", async function () {
-      const { basicDutchAuctionToken, owner } = await loadFixture(deployAuctionFixture);
+    it("Should set the right owner", async function () {
+      const { lock, owner } = await loadFixture(deployOneYearLockFixture);
 
-      expect(basicDutchAuctionToken.connect(owner.address).bid({value:200})).to.be.revertedWith('Sellers are not allowed to buy');
+      expect(await lock.owner()).to.equal(owner.address);
     });
 
-    it("Bid from buyer account - Equal to the current price", async function () {
-      const { basicDutchAuctionToken, owner, otherAccount } = await loadFixture(deployAuctionFixture);
+    it("Should receive and store the funds to lock", async function () {
+      const { lock, lockedAmount } = await loadFixture(
+        deployOneYearLockFixture
+      );
 
-      expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 }));
+      expect(await ethers.provider.getBalance(lock.address)).to.equal(
+        lockedAmount
+      );
     });
 
-    // it("Bid from buyer account - Greater than the current price", async function () {
-    //   const { basicDutchAuctionToken, otherAccount } = await loadFixture(deployAuctionFixture);
-
-    //   expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 400 }));
-    // });
-
-    it("Bid from buyer account - Less than the price", async function () {
-      const { basicDutchAuctionToken, owner, otherAccount } = await loadFixture(deployAuctionFixture);
-
-      expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 20 })).to.be.revertedWith('Insufficient Value');
+    it("Should fail if the unlockTime is not in the future", async function () {
+      // We don't use the fixture here because we want a different deployment
+      const latestTime = await time.latest();
+      const Lock = await ethers.getContractFactory("Lock");
+      await expect(Lock.deploy(latestTime, { value: 1 })).to.be.revertedWith(
+        "Unlock time should be in the future"
+      );
     });
   });
 
-  describe("Auction Conclusion", function () {
-    it("Auction Concluded - bid from another buyer", async function () {
-      const { basicDutchAuctionToken, owner, otherAccount } = await loadFixture(deployAuctionFixture);
+  describe("Withdrawals", function () {
+    describe("Validations", function () {
+      it("Should revert with the right error if called too soon", async function () {
+        const { lock } = await loadFixture(deployOneYearLockFixture);
 
-      basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 });
-      expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 })).to.be.revertedWith('Auction Concluded');
+        await expect(lock.withdraw()).to.be.revertedWith(
+          "You can't withdraw yet"
+        );
+      });
+
+      it("Should revert with the right error if called from another account", async function () {
+        const { lock, unlockTime, otherAccount } = await loadFixture(
+          deployOneYearLockFixture
+        );
+
+        // We can increase the time in Hardhat Network
+        await time.increaseTo(unlockTime);
+
+        // We use lock.connect() to send a transaction from another account
+        await expect(lock.connect(otherAccount).withdraw()).to.be.revertedWith(
+          "You aren't the owner"
+        );
+      });
+
+      it("Shouldn't fail if the unlockTime has arrived and the owner calls it", async function () {
+        const { lock, unlockTime } = await loadFixture(
+          deployOneYearLockFixture
+        );
+
+        // Transactions are sent using the first signer by default
+        await time.increaseTo(unlockTime);
+
+        await expect(lock.withdraw()).not.to.be.reverted;
+      });
     });
 
-    it("Auction Closed", async function () {
-        const { basicDutchAuctionToken, otherAccount } = await loadFixture(deployAuctionFixture);
-        basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 });
-        
-        expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 })).to.be.revertedWith('Auction Concluded');
-        });
-        
-        it("Auction Closed", async function () {
-        const { basicDutchAuctionToken, otherAccount } = await loadFixture(deployAuctionFixture);
-        
-        await time.increase(time.duration.hours(20));
-        expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 })).to.be.revertedWith('Auction Closed');
-        });
-        
-        
-        it("Bid from buyer account - After the auction is closed", async function () {
-        const { basicDutchAuctionToken, otherAccount } = await loadFixture(deployAuctionFixture);
-        
-        await time.increase(time.duration.days(10));
-        
-        expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 400 })).to.be.revertedWith('Auction Closed');
-        });
-        
-        it("Bid from buyer account - After the auction has been concluded", async function () {
-        const { basicDutchAuctionToken, owner, otherAccount } = await loadFixture(deployAuctionFixture);
-        
-        basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 400 });
-        
-        expect(basicDutchAuctionToken.connect(owner.address).bid({from: owner.address, value: 400 })).to.be.revertedWith('Auction Concluded');
-        });
-        
-        
-        it("Auction Concluded - Bid from buyer after auction is concluded", async function () {
-        const { basicDutchAuctionToken, otherAccount } = await loadFixture(deployAuctionFixture);
-        
-          // Move time forward to end the auction
-          await time.increase(time.duration.hours(10));
-        
-          expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 })).to.be.revertedWith('Auction Concluded');
-        });
-        
-        it("Auction Closed - Bid from buyer after auction is closed", async function () {
-          const { basicDutchAuctionToken, otherAccount } = await loadFixture(deployAuctionFixture);
-          
-          // Move time forward to end the auction
-          await time.increase(time.duration.hours(20));
-        
-          expect(basicDutchAuctionToken.connect(otherAccount.address).bid({from: otherAccount.address, value: 200 })).to.be.revertedWith('Auction Closed');
-        });
-        });
+    describe("Events", function () {
+      it("Should emit an event on withdrawals", async function () {
+        const { lock, unlockTime, lockedAmount } = await loadFixture(
+          deployOneYearLockFixture
+        );
+
+        await time.increaseTo(unlockTime);
+
+        await expect(lock.withdraw())
+          .to.emit(lock, "Withdrawal")
+          .withArgs(lockedAmount, anyValue); // We accept any value as `when` arg
+      });
+    });
+
+    describe("Transfers", function () {
+      it("Should transfer the funds to the owner", async function () {
+        const { lock, unlockTime, lockedAmount, owner } = await loadFixture(
+          deployOneYearLockFixture
+        );
+
+        await time.increaseTo(unlockTime);
+
+        await expect(lock.withdraw()).to.changeEtherBalances(
+          [owner, lock],
+          [lockedAmount, -lockedAmount]
+        );
+      });
+    });
   });
+});

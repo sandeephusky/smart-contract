@@ -7,12 +7,12 @@ contract BasicDutchAuction {
     address payable public seller;
     address public buyer = address(0x0);
 
-    uint256 immutable reservePrice;
-    uint256 numBlockAuctionOpen;
-    uint256 immutable offerPriceDecrement;
-    uint256 immutable initialPrice;
+    uint256 immutable public reservePrice;
+    uint256 immutable public numBlockAuctionOpen;
+    uint256 immutable public offerPriceDecrement;
+    uint256 immutable public initialPrice;
 
-    uint256 immutable initialBlock;
+    uint256 immutable public initialBlock;
     uint256 endBlock;
 
     constructor(uint256 _reservePrice, uint256 _numBlocksAuctionOpen, uint256 _offerPriceDecrement) {
