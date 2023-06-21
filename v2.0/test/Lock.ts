@@ -82,7 +82,7 @@ describe("testNFTMint", function () {
         });
         
     });
-    // expect( nftDutchAuctionToken.currentNFTOwner()).to.equal(otherAccount.address);
+    
 });
 
 });
